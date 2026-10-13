@@ -1,6 +1,6 @@
-# Violation Checker
+# Fleet Violation AI Agent
 
-**Project page:** https://jaalak.github.io/fleet-violation-ai-agent/
+**▶ Use it in your browser: https://jaalak.github.io/fleet-violation-ai-agent/** (no install needed)
 
 AI agent that checks whether an IVMS speeding violation (e.g. `Adnoc-over-speed-reckless`) is genuine or a
 false positive caused by a GPS jump, a wrong speed zone or a single-sample spike.
@@ -25,6 +25,32 @@ false positive caused by a GPS jump, a wrong speed zone or a single-sample spike
 4. **Agent** (`checker/agent.py`): the selected LLM gets the data, the rule results and the screenshot. It
    can zoom into the map, compute point-to-point speeds and look up roads. It then submits a verdict:
    **VALID / LIKELY_FALSE / NEEDS_REVIEW** with confidence, reasons, evidence and a recommended action.
+
+## Web app (GitHub Pages)
+
+The app in [`docs/`](docs/) runs entirely in the browser:
+
+1. Open https://jaalak.github.io/fleet-violation-ai-agent/
+2. Pick **Claude, ChatGPT or Gemini**, paste your API key and click **Connect**.
+3. Add the Violation Details PDF, the optional RAG PDF and the tracking screenshots, then click **Check violations**.
+
+There is no server. The key and the files go straight from your browser to the AI provider you chose, and GPS
+points go to OpenStreetMap. The key is kept for that browser tab only, unless the user ticks "Remember". A
+strict Content-Security-Policy only lets the page talk to those services. The web app uses API keys only:
+browsers can't use the command-line account logins described below.
+
+Web app code: `docs/js/` (plain ES modules, no build step). Tests:
+
+```powershell
+node --test tests_web/web.test.mjs              # rules, schemas, full pipeline with a fake AI
+# browser end-to-end in headless Edge/Chrome with fake AI responses:
+cd docs; python -m http.server 8765 --bind 127.0.0.1    # in one terminal
+node tests_web/browser_e2e.mjs                  # in another, from the repo root
+```
+
+## Python version (optional, runs locally)
+
+The original Streamlit version is still included. It also supports account sign-in.
 
 ## Choosing the AI provider
 
