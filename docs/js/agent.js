@@ -2,6 +2,7 @@
 // and submits a verdict.
 
 import { haversineM, impliedSpeedKph, nearestRoad } from "./geo.js";
+import { policySummary } from "./policy.js";
 import { HAVERSINE_ARGS, ROAD_ARGS, VERDICT_ARGS, ZOOM_ARGS } from "./schemas.js";
 
 export const SYSTEM_PROMPT = `You are a fleet road-safety analyst at a UAE transport company. Telematics (IVMS) units raise speeding \
@@ -10,7 +11,8 @@ whether it is genuine or a false positive, so that drivers are not penalised for
 offences are not dismissed.
 
 You receive: the violation row, facts read from the Historical Tracking screenshot (if any), the \
-screenshot itself, and the results of deterministic checks R1-R7. The numbers in the checks are computed \
+screenshot itself, the ADNOC IVMS policy the platform is configured with, and the results of deterministic \
+checks R1-R8. The numbers in the checks are computed \
 by code - trust them and do not recompute them by hand. You can call tools to zoom into the screenshot, \
 compute point-to-point speeds and look up roads in OpenStreetMap.
 
@@ -21,11 +23,18 @@ length divided by the duration is far above any possible vehicle speed, the posi
 speed limit applied from it) is wrong.
 - Wrong zone / geofence: the vehicle is really on a highway with a higher limit, but a bad fix put it in a \
 low-limit zone (city, camp, sand track), so a legal speed was judged against the wrong limit.
-- Single-sample spike: a violation lasting only a few seconds with no supporting speed before/after.
+- Duration is NOT a defence for Reckless: the policy threshold time is >= 0 s, so a 3-second Reckless \
+event is valid by duration. Over speed, however, needs 30 s continuous above the limit; a shorter \
+Over speed event should not have been recorded.
 
 Signals that support a genuine violation: the trace follows a road; the odometer distance over the event \
 matches the reported speed (R1 PASS) AND the position is plausible; the speed clearly exceeds the limit of \
-the road the vehicle is actually on; the event is sustained.
+the road the vehicle is actually on (Reckless = limit + 20 km/h or more).
+
+For Reckless and Over speed the decisive question is usually: was the speed limit applied (from the \
+geofenced zone) the correct one for where the vehicle really was? Use R5/R8, the trace and lookup_road. \
+If the vehicle was really on a black-top road with a higher posted limit, re-judge the speed against \
+that limit using the policy.
 
 Note: R1 PASS only shows the speed reading is internally consistent - it does NOT prove the location (and \
 hence the applicable limit) is right. Weigh location evidence separately.
@@ -48,7 +57,7 @@ distances, rule IDs). Be fair to both the driver and the company.`;
  * @param c        case {id, event, rules, tracking, screenshot: {b64, mime, width, height} | null}
  * @param cropper  async (screenshot, {x0,y0,x1,y1}) -> {b64, mime}   (canvas in the browser)
  */
-export async function reviewViolation(llm, c, rag, cropper, onProgress, roadLookup = nearestRoad) {
+export async function reviewViolation(llm, c, rag, cropper, onProgress, roadLookup = nearestRoad, vehicleClass = "light") {
   let result = null;
   const tools = [
     {
@@ -91,6 +100,7 @@ export async function reviewViolation(llm, c, rag, cropper, onProgress, roadLook
   parts.push({ type: "text", text:
     `Violation ID: ${c.id}\n\nViolation row:\n${JSON.stringify(c.event, null, 1)}\n\n` +
     `Tracking facts read from the screenshot:\n${c.tracking ? JSON.stringify(c.tracking, null, 1) : "no matching screenshot"}\n\n` +
+    `${policySummary(vehicleClass)}\n\n` +
     `Deterministic checks:\n${rulesTxt}\n\n` +
     `Road Safety RAG report:\n${rag ? JSON.stringify(rag, null, 1) : "not provided"}\n\n` +
     "Investigate with the tools, then call submit_verdict." });

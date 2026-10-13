@@ -22,6 +22,7 @@ def check_violations(
     screenshots: Optional[list[tuple[str, bytes]]] = None,
     progress: Progress = lambda _msg: None,
     use_agent: bool = True,
+    vehicle_class: str = "light",
 ) -> tuple[list[CaseResult], Optional[RagSummary]]:
     screenshots = screenshots or []
 
@@ -44,7 +45,7 @@ def check_violations(
         if tr.popup_lat is not None and tr.popup_lon is not None:
             roads[i] = nearest_road(tr.popup_lat, tr.popup_lon)
 
-    rules = run_rules(events, matched, rag, roads)
+    rules = run_rules(events, matched, rag, roads, vehicle_class)
     shot_bytes = dict(screenshots)
 
     cases = []
@@ -61,6 +62,7 @@ def check_violations(
                     llm, case.violation_id, case.event, case.rules, case.tracking,
                     shot_bytes.get(case.screenshot_name) if case.screenshot_name else None, rag,
                     on_progress=lambda m, vid=case.violation_id: progress(f"  [{vid}] {m}"),
+                    vehicle_class=vehicle_class,
                 )
             except Exception as e:  # keep the other cases going; show the error in the UI
                 case.error = f"{type(e).__name__}: {e}"

@@ -1,12 +1,12 @@
-// Deterministic checks R1-R7 (port of checker/rules.py). The agent receives these; it never recomputes them.
+// Deterministic checks R1-R8 (port of checker/rules.py). The agent receives these; it never recomputes them.
 
 import { haversineM, impliedSpeedKph } from "./geo.js";
+import { classifyEvent, inNightWindow, POLICY, ragBand, roadTypeFromOsm, roadTypeFromZone } from "./policy.js";
 import { eventStart, parseTs } from "./util.js";
 
 export const CONFIG = {
   speed_consistency_tolerance_kph: 15, // R1
   max_plausible_speed_kph: 200,        // R1, R2
-  min_violation_duration_s: 10,        // R3
   road_search_radius_m: 40,            // R5
   max_plausible_avg_speed_kph: 160,    // R6
   match_tolerance_s: 5,                // screenshot <-> violation matching
@@ -74,22 +74,51 @@ export function r2GpsJump(ev, tr) {
 }
 
 export function r3Duration(ev) {
-  const name = "Sustained duration";
-  const m = CONFIG.min_violation_duration_s;
-  if (ev.duration_seconds < m)
-    return res("R3", name, FLAG, `Lasted only ${ev.duration_seconds} s (< ${m} s) - could be a single-sample spike.`);
-  return res("R3", name, PASS, `Sustained for ${ev.duration_seconds} s.`);
+  const name = "Duration vs. policy threshold";
+  const type = classifyEvent(ev.event);
+  if (!type) return res("R3", name, NA, `Event type '${ev.event}' is not covered by the policy table.`);
+  const p = POLICY.events[type];
+  if (ev.duration_seconds < p.min_duration_s)
+    return res("R3", name, FAIL, `${p.label} needs >= ${p.min_duration_s} s (${POLICY.version}); this event lasted only ` +
+      `${ev.duration_seconds} s, so it should not have been recorded.`);
+  if (p.min_duration_s === 0)
+    return res("R3", name, PASS, `${p.label} has a >= 0 s threshold (${POLICY.version}): a ${ev.duration_seconds} s event ` +
+      "is valid by duration alone. Short duration is not a defence; the location is what matters.");
+  return res("R3", name, PASS, `Lasted ${ev.duration_seconds} s (>= ${p.min_duration_s} s required for ${p.label}).`);
 }
 
 export function r4ZoneLimit(ev, tr) {
-  const name = "Speed vs. zone limit";
+  const name = "Speed vs. policy trigger";
+  const type = classifyEvent(ev.event);
+  const speed = ev.speed_kph;
+  if (type === "night_driving") {
+    const inWin = inNightWindow(ev.start_time);
+    const minV = POLICY.events.night_driving.min_speed_kph;
+    if (inWin === false) return res("R4", name, FAIL, `${ev.start_time} is outside the 21:00-04:30 night window.`);
+    if (speed < minV) return res("R4", name, FAIL, `${r0(speed)} km/h is below the ${minV} km/h night-driving threshold.`);
+    return res("R4", name, PASS, `${ev.start_time} is inside 21:00-04:30 at ${r0(speed)} km/h.`);
+  }
+  if (type === "seatbelt") {
+    const minV = POLICY.events.seatbelt.min_speed_kph;
+    return speed >= minV ? res("R4", name, PASS, `${r0(speed)} km/h >= ${minV} km/h seatbelt threshold.`)
+      : res("R4", name, FAIL, `${r0(speed)} km/h is below the ${minV} km/h seatbelt threshold.`);
+  }
   if (!tr || !has(tr.zone_speed_limit_kph)) return res("R4", name, NA, "Zone speed limit not visible.");
   const lim = tr.zone_speed_limit_kph;
   const zone = tr.zone_name || "unknown zone";
-  if (ev.speed_kph <= lim)
-    return res("R4", name, FAIL, `${r0(ev.speed_kph)} km/h does not exceed the ${r0(lim)} km/h limit of ${zone}.`);
-  return res("R4", name, PASS, `${r0(ev.speed_kph)} km/h exceeds the ${r0(lim)} km/h limit of '${zone}' by ` +
-    `${r0(ev.speed_kph - lim)} km/h (if the zone assignment is correct).`);
+  if (type === "reckless") {
+    const over = POLICY.events.reckless.over_limit_kph;
+    const trigger = lim + over;
+    if (speed < trigger)
+      return res("R4", name, FAIL, `Reckless needs >= ${r0(trigger)} km/h (${r0(lim)} limit + ${over}); ` +
+        `reported ${r0(speed)} km/h, so this is not reckless even in '${zone}'.`);
+    return res("R4", name, PASS, `${r0(speed)} km/h >= ${r0(trigger)} km/h (${r0(lim)} km/h limit of '${zone}' + ${over}): ` +
+      "reckless by policy, if the zone assignment is correct.");
+  }
+  if (speed <= lim)
+    return res("R4", name, FAIL, `${r0(speed)} km/h does not exceed the ${r0(lim)} km/h limit of '${zone}'.`);
+  return res("R4", name, PASS, `${r0(speed)} km/h exceeds the ${r0(lim)} km/h limit of '${zone}' by ${r0(speed - lim)} km/h ` +
+    "(if the zone assignment is correct).");
 }
 
 function roadLabel(road) {
@@ -145,11 +174,67 @@ export function r7CrossReport(ev, events, rag) {
   const nOver = mine.filter((e) => e.event.toLowerCase().includes("over-speed") && !e.event.toLowerCase().includes("reckless")).length;
   const detail = `RAG: reckless=${row.reckless}, over-speed=${row.over_speed}; violation list: reckless=${nReck}, over-speed=${nOver}.`;
   if (row.reckless !== nReck || row.over_speed !== nOver) return res("R7", name, FLAG, detail + " Counts differ.");
-  return res("R7", name, PASS, detail + " Counts agree.");
+  const type = classifyEvent(ev.event);
+  const count = type === "reckless" ? row.reckless : type === "over_speed" ? row.over_speed : null;
+  let impact = "";
+  if (count !== null && count > 0) {
+    const now = ragBand(type, count), after = ragBand(type, count - 1);
+    impact = ` ${POLICY.events[type].label}: ${count} this month = ${now}` +
+      (after !== now ? `; overturning this event makes it ${after}.` : `; overturning this event alone keeps it ${after}.`);
+  }
+  return res("R7", name, PASS, detail + " Counts agree." + impact);
+}
+
+export function r8ZonePolicy(ev, tr, road, vehicleClass = "light") {
+  const name = "Zone vs. ADNOC policy and the actual road";
+  if (!tr || !has(tr.zone_speed_limit_kph)) return res("R8", name, NA, "Zone speed limit not visible.");
+  const lim = tr.zone_speed_limit_kph;
+  const zoneRoad = roadTypeFromZone(tr.zone_name);
+  const caps = POLICY.max_speed[vehicleClass];
+  const notes = [];
+  let status = PASS;
+
+  if (zoneRoad) {
+    const cap = caps[zoneRoad];
+    const label = zoneRoad === "black_top" ? "black top" : "off road";
+    if (lim > cap) {
+      status = FLAG;
+      notes.push(`Zone limit ${r0(lim)} km/h is above the policy max of ${cap} km/h for ${label}: geofence misconfigured.`);
+    } else {
+      notes.push(`Zone '${tr.zone_name}' is ${label}; its ${r0(lim)} km/h limit is within the policy max (${cap} km/h).`);
+    }
+  } else {
+    notes.push(`Road type of zone '${tr.zone_name || "?"}' is unclear from its name.`);
+  }
+
+  const onRoad = !!(road && road.ok && has(road.distance_m) && road.distance_m <= CONFIG.road_search_radius_m);
+  const osmType = onRoad ? roadTypeFromOsm(road) : null;
+  if (zoneRoad === "off_road" && osmType === "black_top") {
+    status = FLAG;
+    const maxspeed = num(road.maxspeed);
+    let outcome = "";
+    if (maxspeed) {
+      const eff = Math.min(maxspeed, POLICY.absolute_max_kph, caps.black_top);
+      const reckless = classifyEvent(ev.event) === "reckless";
+      const trig = reckless ? eff + POLICY.events.reckless.over_limit_kph : eff;
+      outcome = ` Against that road's ${r0(eff)} km/h limit, ${r0(ev.speed_kph)} km/h would ` +
+        `${ev.speed_kph >= trig ? "still" : "NOT"} be ${reckless ? "reckless" : "over the limit"}.`;
+    }
+    notes.push(`But the GPS point is on ${roadLabel(road)}, a black-top road: the off-road limit may have been applied wrongly.${outcome}`);
+  } else if (zoneRoad === "black_top" && road && road.ok && !onRoad) {
+    status = FLAG;
+    notes.push("But the GPS point is not on any mapped road, so the position itself is doubtful.");
+  } else if (zoneRoad === "off_road" && road && road.ok && !onRoad) {
+    notes.push("The GPS point is not on a mapped road. That fits off-road driving, but also fits a bad GPS fix.");
+  }
+  if (ev.speed_kph > POLICY.absolute_max_kph)
+    notes.push(`${r0(ev.speed_kph)} km/h is above the ${POLICY.absolute_max_kph} km/h absolute maximum on any road.`);
+  return res("R8", name, status, notes.join(" "));
 }
 
 /** Returns Map(eventIndex -> RuleResult[]). matched: Map(i -> {name, tracking}); roads: Map(i -> road). */
-export function runRules(events, matched, rag, roads) {
+export function runRules(events, matched, rag, roads, opts = {}) {
+  const vehicleClass = opts.vehicleClass || "light";
   const order = events.map((_, i) => i).sort((a, b) => eventStart(events[a]) - eventStart(events[b]));
   const pairs = order.map((i) => [events[i], matched.get(i)?.tracking || null]);
   const out = new Map();
@@ -163,6 +248,7 @@ export function runRules(events, matched, rag, roads) {
       r5RoadCheck(tr, roads.get(i), ev.speed_kph),
       r6Odometer(pairs, pos),
       r7CrossReport(ev, events, rag),
+      r8ZonePolicy(ev, tr, roads.get(i), vehicleClass),
     ]);
   });
   return out;

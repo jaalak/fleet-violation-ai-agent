@@ -20,7 +20,7 @@ const TRACKING_PROMPT =
 
 /**
  * @param input {violationPdf: {b64,name}, ragPdf?: {b64,name}, shots: [{name, b64, mime, width, height}]}
- * @param opts  {progress(msg), useAgent, cropper, roadLookup}
+ * @param opts  {progress(msg), useAgent, cropper, roadLookup, vehicleClass}
  */
 export async function checkViolations(llm, input, opts = {}) {
   const progress = opts.progress || (() => {});
@@ -49,7 +49,8 @@ export async function checkViolations(llm, input, opts = {}) {
     const t = m.tracking;
     if (t.popup_lat != null && t.popup_lon != null) roads.set(i, await roadLookup(t.popup_lat, t.popup_lon));
   }));
-  const rules = runRules(events, matched, rag, roads);
+  const vehicleClass = opts.vehicleClass || "light";
+  const rules = runRules(events, matched, rag, roads, { vehicleClass });
   const shotsByName = Object.fromEntries((input.shots || []).map((s) => [s.name, s]));
 
   const cases = events.map((ev, i) => {
@@ -64,7 +65,7 @@ export async function checkViolations(llm, input, opts = {}) {
     await mapLimit(cases, 3, async (c) => {
       progress(`Agent reviewing ${c.id}…`);
       try {
-        c.verdict = await reviewViolation(llm, c, rag, opts.cropper, (m) => progress(`  [${c.id}] ${m}`), roadLookup);
+        c.verdict = await reviewViolation(llm, c, rag, opts.cropper, (m) => progress(`  [${c.id}] ${m}`), roadLookup, vehicleClass);
       } catch (e) {
         c.error = e.message || String(e);
       }

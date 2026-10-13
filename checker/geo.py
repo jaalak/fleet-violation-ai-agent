@@ -83,6 +83,7 @@ def nearest_road(lat: float, lon: float, search_radius_m: int = 300) -> dict:
                 "ref": tags.get("ref"),
                 "highway": tags.get("highway"),
                 "maxspeed": tags.get("maxspeed"),
+                "surface": tags.get("surface"),
             }
         )
     roads.sort(key=lambda r: r["distance_m"])

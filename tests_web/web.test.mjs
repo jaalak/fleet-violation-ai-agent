@@ -5,6 +5,7 @@ import { test } from "node:test";
 
 import { haversineM } from "../docs/js/geo.js";
 import { checkViolations, toJson, toMarkdown } from "../docs/js/pipeline.js";
+import { classifyEvent, inNightWindow, ragBand, roadTypeFromOsm, roadTypeFromZone } from "../docs/js/policy.js";
 import { FAIL, FLAG, matchTracking, NA, PASS, runRules } from "../docs/js/rules.js";
 import { RAG_SUMMARY, TRACKING_EVIDENCE, VERDICT_ARGS, VIOLATION_REPORT } from "../docs/js/schemas.js";
 import { bytesToBase64, parseTs, pickLatest, sniffImageType } from "../docs/js/util.js";
@@ -15,7 +16,7 @@ const ev = (start, end, speed) => ({ driver: DRIVER, date: "2026-10-11", event: 
 const EVENTS = [ev("18:27:29", "18:27:32", 105), ev("19:41:13", "19:41:16", 120)];
 const TRACK_CITY = { trip_start: "2026-10-11 18:27:29", trip_end: "2026-10-11 18:27:32", trip_distance_km: 0.084,
   trip_duration_seconds: 3, popup_timestamp: "11/10/2026 18:27:29", popup_speed_kph: 105, popup_odometer_km: 100000.0,
-  zone_name: "Test-City-Zone", zone_speed_limit_kph: 80, popup_lat: 24.140588, popup_lon: 54.188889,
+  zone_name: "BT-Test-City", zone_speed_limit_kph: 80, popup_lat: 24.140588, popup_lon: 54.188889,
   other_endpoint_lat: null, other_endpoint_lon: null };
 const TRACK_DESERT = { ...TRACK_CITY, trip_start: "2026-10-11 19:41:13", trip_end: "2026-10-11 19:41:16",
   trip_distance_km: 0.099, popup_timestamp: "2026-10-11 19:41:13", popup_speed_kph: 119, popup_odometer_km: 100063.43,
@@ -44,11 +45,48 @@ test("rules match the Python version", () => {
   assert.equal(byId(r.get(0)).R1.status, PASS);
   assert.equal(byId(r.get(1)).R1.status, PASS);
   assert.equal(byId(r.get(0)).R2.status, NA);
-  assert.equal(byId(r.get(0)).R3.status, FLAG);
+  assert.equal(byId(r.get(0)).R3.status, PASS); // reckless threshold time is >= 0 s
   assert.equal(byId(r.get(0)).R4.status, PASS);
   assert.equal(byId(r.get(0)).R6.status, NA);
   assert.equal(byId(r.get(1)).R6.status, PASS);
   assert.equal(byId(r.get(0)).R7.status, PASS);
+  assert.match(byId(r.get(0)).R7.detail, /= RED; overturning this event makes it AMBER/);
+  assert.equal(r.get(0).length, 8);
+});
+
+test("policy helpers", () => {
+  assert.equal(classifyEvent("Adnoc-over-speed-reckless"), "reckless");
+  assert.equal(classifyEvent("Adnoc-over-speed"), "over_speed");
+  assert.equal(roadTypeFromZone("BT-City-Madinat Zayed"), "black_top");
+  assert.equal(roadTypeFromZone("Desert-Buhasa North East Sand Tracks (Part1)"), "off_road");
+  assert.equal(roadTypeFromOsm({ highway: "trunk" }), "black_top");
+  assert.equal(roadTypeFromOsm({ highway: "track" }), "off_road");
+  assert.equal(roadTypeFromOsm({ highway: "service", surface: "sand" }), "off_road");
+  assert.deepEqual([0, 1, 2].map((n) => ragBand("reckless", n)), ["GREEN", "AMBER", "RED"]);
+  assert.deepEqual([3, 4].map((n) => ragBand("over_speed", n)), ["AMBER", "RED"]);
+  assert.deepEqual(["21:00:00", "03:59:00", "04:30:00", "12:00:00"].map(inNightWindow), [true, true, false, false]);
+});
+
+test("policy: over speed needs 30 s, reckless needs limit + 20", () => {
+  const one = (e, t = TRACK_CITY) => byId(runRules([e], new Map([[0, { name: "c", tracking: t }]]), null, new Map()).get(0));
+  const over = { ...EVENTS[0], event: "Adnoc-over-speed" };
+  assert.equal(one(over).R3.status, FAIL);
+  assert.equal(one({ ...over, duration_seconds: 45 }).R3.status, PASS);
+  assert.equal(one({ ...EVENTS[0], speed_kph: 95 }).R4.status, FAIL); // 95 < 80 + 20
+  assert.equal(one({ ...EVENTS[0], speed_kph: 100 }).R4.status, PASS);
+});
+
+test("R8: off-road zone but GPS on a black-top road with a higher limit", () => {
+  const roads = new Map([[0, { ok: true, distance_m: 6, highway: "trunk", ref: "E13", maxspeed: "120" }]]);
+  const r8 = byId(runRules(EVENTS.slice(1), new Map([[0, { name: "d", tracking: TRACK_DESERT }]]), null, roads).get(0)).R8;
+  assert.equal(r8.status, FLAG);
+  assert.match(r8.detail, /would NOT be reckless/);
+  const ok = byId(runRules(EVENTS.slice(0, 1), new Map([[0, { name: "c", tracking: TRACK_CITY }]]), null,
+    new Map([[0, { ok: true, distance_m: 5, highway: "residential" }]])).get(0)).R8;
+  assert.equal(ok.status, PASS);
+  const heavy = byId(runRules(EVENTS.slice(0, 1), new Map([[0, { name: "c", tracking: { ...TRACK_CITY, zone_speed_limit_kph: 100 } }]]),
+    null, new Map(), { vehicleClass: "heavy" }).get(0)).R8;
+  assert.equal(heavy.status, FLAG); // 100 km/h zone > 80 km/h heavy-vehicle black-top max
 });
 
 test("R2 detects a GPS jump", () => {
@@ -130,6 +168,7 @@ test("full pipeline with a fake provider", async () => {
     assert.equal(c.verdict.verdict, "LIKELY_FALSE");
     assert.equal(c.verdict.confidence, 1); // clamped
     assert.equal(byId(c.rules).R5.status, PASS);
+    assert.equal(c.rules.length, 8);
   }
   assert.equal(toolCalls[0][1][0].type, "image");
   assert.ok(msgs.some((m) => m.includes("submit_verdict")));

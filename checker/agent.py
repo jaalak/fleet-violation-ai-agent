@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 
 from .extract import to_image
 from .geo import haversine_m, implied_speed_kph, nearest_road
+from .policy import policy_summary
 from .llm import Image, LLMError, LLMProvider, Text, ToolSpec
 from .models import RagSummary, RuleResult, TrackingEvidence, Verdict, VerdictLabel, ViolationEvent
 
@@ -21,7 +22,8 @@ whether it is genuine or a false positive, so that drivers are not penalised for
 offences are not dismissed.
 
 You receive: the violation row, facts read from the Historical Tracking screenshot (if any), the \
-screenshot itself, and the results of deterministic checks R1-R7. The numbers in the checks are computed \
+screenshot itself, the ADNOC IVMS policy the platform is configured with, and the results of deterministic \
+checks R1-R8. The numbers in the checks are computed \
 by code - trust them and do not recompute them by hand. You can call tools to zoom into the screenshot, \
 compute point-to-point speeds and look up roads in OpenStreetMap.
 
@@ -32,11 +34,18 @@ length divided by the duration is far above any possible vehicle speed, the posi
 speed limit applied from it) is wrong.
 - Wrong zone / geofence: the vehicle is really on a highway with a higher limit, but a bad fix put it in a \
 low-limit zone (city, camp, sand track), so a legal speed was judged against the wrong limit.
-- Single-sample spike: a violation lasting only a few seconds with no supporting speed before/after.
+- Duration is NOT a defence for Reckless: the policy threshold time is >= 0 s, so a 3-second Reckless \
+event is valid by duration. Over speed, however, needs 30 s continuous above the limit; a shorter \
+Over speed event should not have been recorded.
 
 Signals that support a genuine violation: the trace follows a road; the odometer distance over the event \
 matches the reported speed (R1 PASS) AND the position is plausible; the speed clearly exceeds the limit of \
-the road the vehicle is actually on; the event is sustained.
+the road the vehicle is actually on (Reckless = limit + 20 km/h or more).
+
+For Reckless and Over speed the decisive question is usually: was the speed limit applied (from the \
+geofenced zone) the correct one for where the vehicle really was? Use R5/R8, the trace and lookup_road. \
+If the vehicle was really on a black-top road with a higher posted limit, re-judge the speed against \
+that limit using the policy.
 
 Note: R1 PASS only shows the speed reading is internally consistent - it does NOT prove the location (and \
 hence the applicable limit) is right. Weigh location evidence separately.
@@ -113,6 +122,7 @@ def review_violation(
     screenshot: Optional[bytes] = None,
     rag: Optional[RagSummary] = None,
     on_progress=None,
+    vehicle_class: str = "light",
 ) -> Verdict:
     result: dict = {}
 
@@ -154,6 +164,7 @@ def review_violation(
         f"Violation ID: {vid}\n\nViolation row:\n{event.model_dump_json(indent=1)}\n\n"
         f"Tracking facts read from the screenshot:\n"
         f"{tracking.model_dump_json(indent=1) if tracking else 'no matching screenshot'}\n\n"
+        f"{policy_summary(vehicle_class)}\n\n"
         f"Deterministic checks:\n{rules_txt}\n\n"
         f"Road Safety RAG report:\n{rag.model_dump_json(indent=1) if rag else 'not provided'}\n\n"
         "Investigate with the tools, then call submit_verdict."

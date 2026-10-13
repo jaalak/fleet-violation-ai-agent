@@ -6,8 +6,6 @@ rules:
   speed_consistency_tolerance_kph: 15
   # R2: any implied speed above this is physically impossible for a road vehicle -> GPS jump
   max_plausible_speed_kph: 200
-  # R3: events shorter than this are treated as transient spikes
-  min_violation_duration_s: 10
   # R4: radius used to look for a road around the GPS point
   road_search_radius_m: 40
   # R5: average speed between consecutive events above this is implausible

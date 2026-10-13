@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import Optional
 
 from .config import load_config
+from . import policy as P
 from .geo import haversine_m, implied_speed_kph
 from .models import RagSummary, RuleResult, RuleStatus, TrackingEvidence, ViolationEvent
 
@@ -100,27 +101,63 @@ def r2_gps_jump(ev: ViolationEvent, tr: Optional[TrackingEvidence]) -> RuleResul
 
 
 def r3_duration(ev: ViolationEvent) -> RuleResult:
-    name = "Sustained duration"
-    m = _cfg()["min_violation_duration_s"]
-    if ev.duration_seconds < m:
-        return RuleResult(rule="R3", name=name, status=S.FLAG,
-                          detail=f"Lasted only {ev.duration_seconds} s (< {m} s) - could be a single-sample spike.")
+    name = "Duration vs. policy threshold"
+    etype = P.classify_event(ev.event)
+    if not etype:
+        return RuleResult(rule="R3", name=name, status=S.NA,
+                          detail=f"Event type '{ev.event}' is not covered by the policy table.")
+    p = P.EVENTS[etype]
+    if ev.duration_seconds < p["min_duration_s"]:
+        return RuleResult(rule="R3", name=name, status=S.FAIL,
+                          detail=f"{p['label']} needs >= {p['min_duration_s']} s ({P.VERSION}); this event lasted only "
+                                 f"{ev.duration_seconds} s, so it should not have been recorded.")
+    if p["min_duration_s"] == 0:
+        return RuleResult(rule="R3", name=name, status=S.PASS,
+                          detail=f"{p['label']} has a >= 0 s threshold ({P.VERSION}): a {ev.duration_seconds} s event is "
+                                 "valid by duration alone. Short duration is not a defence; the location is what matters.")
     return RuleResult(rule="R3", name=name, status=S.PASS,
-                      detail=f"Sustained for {ev.duration_seconds} s.")
+                      detail=f"Lasted {ev.duration_seconds} s (>= {p['min_duration_s']} s required for {p['label']}).")
 
 
 def r4_zone_limit(ev: ViolationEvent, tr: Optional[TrackingEvidence]) -> RuleResult:
-    name = "Speed vs. zone limit"
+    name = "Speed vs. policy trigger"
+    etype = P.classify_event(ev.event)
+    speed = ev.speed_kph
+    if etype == "night_driving":
+        min_v = P.EVENTS["night_driving"]["min_speed_kph"]
+        if P.in_night_window(ev.start_time) is False:
+            return RuleResult(rule="R4", name=name, status=S.FAIL,
+                              detail=f"{ev.start_time} is outside the 21:00-04:30 night window.")
+        if speed < min_v:
+            return RuleResult(rule="R4", name=name, status=S.FAIL,
+                              detail=f"{speed:.0f} km/h is below the {min_v} km/h night-driving threshold.")
+        return RuleResult(rule="R4", name=name, status=S.PASS,
+                          detail=f"{ev.start_time} is inside 21:00-04:30 at {speed:.0f} km/h.")
+    if etype == "seatbelt":
+        min_v = P.EVENTS["seatbelt"]["min_speed_kph"]
+        ok = speed >= min_v
+        return RuleResult(rule="R4", name=name, status=S.PASS if ok else S.FAIL,
+                          detail=f"{speed:.0f} km/h {'>=' if ok else 'is below'} the {min_v} km/h seatbelt threshold.")
     if not tr or tr.zone_speed_limit_kph is None:
         return RuleResult(rule="R4", name=name, status=S.NA, detail="Zone speed limit not visible.")
     lim = tr.zone_speed_limit_kph
     zone = tr.zone_name or "unknown zone"
-    if ev.speed_kph <= lim:
+    if etype == "reckless":
+        over = P.EVENTS["reckless"]["over_limit_kph"]
+        trigger = lim + over
+        if speed < trigger:
+            return RuleResult(rule="R4", name=name, status=S.FAIL,
+                              detail=f"Reckless needs >= {trigger:.0f} km/h ({lim:.0f} limit + {over}); reported "
+                                     f"{speed:.0f} km/h, so this is not reckless even in '{zone}'.")
+        return RuleResult(rule="R4", name=name, status=S.PASS,
+                          detail=f"{speed:.0f} km/h >= {trigger:.0f} km/h ({lim:.0f} km/h limit of '{zone}' + {over}): "
+                                 "reckless by policy, if the zone assignment is correct.")
+    if speed <= lim:
         return RuleResult(rule="R4", name=name, status=S.FAIL,
-                          detail=f"{ev.speed_kph:.0f} km/h does not exceed the {lim:.0f} km/h limit of {zone}.")
+                          detail=f"{speed:.0f} km/h does not exceed the {lim:.0f} km/h limit of {zone}.")
     return RuleResult(rule="R4", name=name, status=S.PASS,
-                      detail=f"{ev.speed_kph:.0f} km/h exceeds the {lim:.0f} km/h limit of '{zone}' "
-                             f"by {ev.speed_kph - lim:.0f} km/h (if the zone assignment is correct).")
+                      detail=f"{speed:.0f} km/h exceeds the {lim:.0f} km/h limit of '{zone}' by {speed - lim:.0f} km/h "
+                             "(if the zone assignment is correct).")
 
 
 def r5_road_check(tr: Optional[TrackingEvidence], road: Optional[dict], speed_kph: float) -> RuleResult:
@@ -188,7 +225,62 @@ def r7_cross_report(ev: ViolationEvent, events: list[ViolationEvent], rag: Optio
               f"violation list: reckless={n_reckless}, over-speed={n_over}.")
     if (row.reckless, row.over_speed) != (n_reckless, n_over):
         return RuleResult(rule="R7", name=name, status=S.FLAG, detail=detail + " Counts differ.")
-    return RuleResult(rule="R7", name=name, status=S.PASS, detail=detail + " Counts agree.")
+    etype = P.classify_event(ev.event)
+    count = {"reckless": row.reckless, "over_speed": row.over_speed}.get(etype)
+    impact = ""
+    if count:
+        now, after = P.rag_band(etype, count), P.rag_band(etype, count - 1)
+        impact = (f" {P.EVENTS[etype]['label']}: {count} this month = {now}; "
+                  + (f"overturning this event makes it {after}." if after != now
+                     else f"overturning this event alone keeps it {after}."))
+    return RuleResult(rule="R7", name=name, status=S.PASS, detail=detail + " Counts agree." + impact)
+
+
+def r8_zone_policy(ev: ViolationEvent, tr: Optional[TrackingEvidence], road: Optional[dict],
+                   vehicle_class: str = "light") -> RuleResult:
+    name = "Zone vs. ADNOC policy and the actual road"
+    if not tr or tr.zone_speed_limit_kph is None:
+        return RuleResult(rule="R8", name=name, status=S.NA, detail="Zone speed limit not visible.")
+    lim = tr.zone_speed_limit_kph
+    zone_road = P.road_type_from_zone(tr.zone_name)
+    caps = P.MAX_SPEED[vehicle_class]
+    notes, status = [], S.PASS
+    if zone_road:
+        cap = caps[zone_road]
+        label = "black top" if zone_road == "black_top" else "off road"
+        if lim > cap:
+            status = S.FLAG
+            notes.append(f"Zone limit {lim:.0f} km/h is above the policy max of {cap} km/h for {label}: "
+                         "geofence misconfigured.")
+        else:
+            notes.append(f"Zone '{tr.zone_name}' is {label}; its {lim:.0f} km/h limit is within the policy max "
+                         f"({cap} km/h).")
+    else:
+        notes.append(f"Road type of zone '{tr.zone_name or '?'}' is unclear from its name.")
+
+    radius = _cfg()["road_search_radius_m"]
+    on_road = bool(road and road.get("ok") and road.get("distance_m") is not None and road["distance_m"] <= radius)
+    osm_type = P.road_type_from_osm(road) if on_road else None
+    if zone_road == "off_road" and osm_type == "black_top":
+        status = S.FLAG
+        outcome = ""
+        maxspeed = _num(road.get("maxspeed"))
+        if maxspeed:
+            eff = min(maxspeed, P.ABSOLUTE_MAX_KPH, caps["black_top"])
+            reckless = P.classify_event(ev.event) == "reckless"
+            trig = eff + P.EVENTS["reckless"]["over_limit_kph"] if reckless else eff
+            outcome = (f" Against that road's {eff:.0f} km/h limit, {ev.speed_kph:.0f} km/h would "
+                       f"{'still' if ev.speed_kph >= trig else 'NOT'} be {'reckless' if reckless else 'over the limit'}.")
+        notes.append(f"But the GPS point is on {_road_label(road)}, a black-top road: the off-road limit may have "
+                     f"been applied wrongly.{outcome}")
+    elif zone_road == "black_top" and road and road.get("ok") and not on_road:
+        status = S.FLAG
+        notes.append("But the GPS point is not on any mapped road, so the position itself is doubtful.")
+    elif zone_road == "off_road" and road and road.get("ok") and not on_road:
+        notes.append("The GPS point is not on a mapped road. That fits off-road driving, but also fits a bad GPS fix.")
+    if ev.speed_kph > P.ABSOLUTE_MAX_KPH:
+        notes.append(f"{ev.speed_kph:.0f} km/h is above the {P.ABSOLUTE_MAX_KPH} km/h absolute maximum on any road.")
+    return RuleResult(rule="R8", name=name, status=status, detail=" ".join(notes))
 
 
 def run_rules(
@@ -196,6 +288,7 @@ def run_rules(
     matched: dict[int, tuple[str, TrackingEvidence]],
     rag: Optional[RagSummary],
     roads: dict[int, dict],
+    vehicle_class: str = "light",
 ) -> dict[int, list[RuleResult]]:
     order = sorted(range(len(events)), key=lambda i: event_start(events[i]))
     pairs = [(events[i], matched.get(i, (None, None))[1]) for i in order]
@@ -210,6 +303,7 @@ def run_rules(
             r5_road_check(tr, roads.get(i), ev.speed_kph),
             r6_odometer(pairs, pos),
             r7_cross_report(ev, events, rag),
+            r8_zone_policy(ev, tr, roads.get(i), vehicle_class),
         ]
     return out
 

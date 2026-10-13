@@ -74,7 +74,7 @@ const MOCK = `(() => {
         let out;
         if (props.includes("events")) out = { period_from: null, period_to: null, events: EVENTS, total_events: 2, max_speed_kph: 120 };
         else if (props.includes("drivers")) out = { period_from: null, period_to: null, drivers: [{ driver: "Test Driver - 050-0000000", distance_km: 2611, driving_duration: null, max_speed_kph: 141, over_speed: 0, reckless: 2, night_driving: 0, seatbelt: 0, harsh_braking: 0, harsh_acceleration: 0, phone_use: 0, smoking: 0, fatigue: 0, distraction: 0 }] };
-        else out = shot++ === 0 ? track("18:27:29", 0.084, 100000, "Test-City-Zone", 24.140588, 54.188889)
+        else out = shot++ === 0 ? track("18:27:29", 0.084, 100000, "BT-Test-City", 24.140588, 54.188889)
                                  : track("19:41:13", 0.099, 100063.43, "Test-Desert-Sand-Tracks", 24.191039, 53.987946);
         return json({ stop_reason: "end_turn", content: [{ type: "text", text: JSON.stringify(out) }] });
       }
@@ -138,7 +138,7 @@ try {
   const cases = await evaluate(`[...document.querySelectorAll(".case")].map(c => ({ pill: c.querySelector(".case-head .pill").textContent, err: c.querySelector(".error-box")?.textContent || null, rules: c.querySelectorAll(".rules tr").length, img: !!c.querySelector(".shot img") }))`);
   check(cases.length === 2, `two violation cards rendered`);
   check(cases.every((c) => !c.err), "no case errors " + JSON.stringify(cases.map((c) => c.err)));
-  check(cases.every((c) => c.rules === 7), "each card shows the 7 checks");
+  check(cases.every((c) => c.rules === 8), "each card shows the 8 checks");
   check(cases.every((c) => c.img), "each card shows its matched screenshot");
   check(cases.map((c) => c.pill).join(" | ").includes("Likely false"), "verdict pill rendered: " + cases.map((c) => c.pill).join(" | "));
   check(log.includes("zoom_screenshot") && log.includes("lookup_road") && log.includes("submit_verdict"), "agent tool calls shown in the log");

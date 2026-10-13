@@ -20,7 +20,7 @@ EVENTS = [ev("18:27:29", "18:27:32", 105), ev("19:41:13", "19:41:16", 120)]
 TRACK_CITY = TrackingEvidence(
     trip_start="2026-10-11 18:27:29", trip_end="2026-10-11 18:27:32", trip_distance_km=0.084,
     trip_duration_seconds=3, popup_timestamp="2026-10-11 18:27:29", popup_speed_kph=105,
-    popup_odometer_km=100000.000, zone_name="Test-City-Zone", zone_speed_limit_kph=80,
+    popup_odometer_km=100000.000, zone_name="BT-Test-City", zone_speed_limit_kph=80,
     popup_lat=24.140588, popup_lon=54.188889,
 )
 TRACK_DESERT = TrackingEvidence(
@@ -65,8 +65,38 @@ def test_r2_na_with_single_point(results):
     assert rules_by_id(results[0])["R2"].status == RuleStatus.NA
 
 
-def test_r3_short_events_flagged(results):
-    assert all(rules_by_id(r)["R3"].status == RuleStatus.FLAG for r in results.values())
+def test_r3_reckless_has_no_minimum_duration(results):
+    # ADNOC HRT-2026-01: reckless threshold time is >= 0 s, so 3 s events are valid by duration
+    assert all(rules_by_id(r)["R3"].status == RuleStatus.PASS for r in results.values())
+
+
+def test_r3_over_speed_needs_30_seconds():
+    over = EVENTS[0].model_copy(update={"event": "Adnoc-over-speed"})
+    assert rules_by_id(run_rules([over], {}, None, {})[0])["R3"].status == RuleStatus.FAIL
+    long = over.model_copy(update={"duration_seconds": 45})
+    assert rules_by_id(run_rules([long], {}, None, {})[0])["R3"].status == RuleStatus.PASS
+
+
+def test_r4_reckless_needs_limit_plus_20():
+    under = [ev("18:27:29", "18:27:32", 95)]
+    assert rules_by_id(run_rules(under, {0: ("c", TRACK_CITY)}, None, {})[0])["R4"].status == RuleStatus.FAIL
+
+
+def test_r7_shows_rag_impact(results):
+    detail = rules_by_id(results[0])["R7"].detail
+    assert "= RED" in detail and "makes it AMBER" in detail
+
+
+def test_r8_off_road_zone_but_on_black_top_road():
+    roads = {0: {"ok": True, "distance_m": 6.0, "highway": "trunk", "ref": "E13", "maxspeed": "120"}}
+    r8 = rules_by_id(run_rules(EVENTS[1:], {0: ("d", TRACK_DESERT)}, None, roads)[0])["R8"]
+    assert r8.status == RuleStatus.FLAG and "would NOT be reckless" in r8.detail
+
+
+def test_r8_heavy_vehicle_zone_above_policy():
+    fast_zone = TRACK_CITY.model_copy(update={"zone_speed_limit_kph": 100})
+    r8 = rules_by_id(run_rules(EVENTS[:1], {0: ("c", fast_zone)}, None, {}, vehicle_class="heavy")[0])["R8"]
+    assert r8.status == RuleStatus.FLAG
 
 
 def test_r4_exceeds_zone_limit(results):
@@ -74,7 +104,7 @@ def test_r4_exceeds_zone_limit(results):
 
 
 def test_r4_fails_when_under_limit():
-    slow = [ev("18:27:29", "18:27:32", 75)]
+    slow = [ev("18:27:29", "18:27:32", 75)]  # below even the 80 km/h zone limit
     r4 = rules_by_id(run_rules(slow, {0: ("c", TRACK_CITY)}, None, {})[0])["R4"]
     assert r4.status == RuleStatus.FAIL
 

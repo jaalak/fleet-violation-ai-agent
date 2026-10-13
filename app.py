@@ -10,6 +10,7 @@ import streamlit as st
 
 from checker.llm import PROVIDERS, Credentials, make_provider
 from checker.models import RuleStatus, VerdictLabel
+from checker.policy import VEHICLE_CLASSES
 from checker.pipeline import check_violations, to_markdown
 
 st.set_page_config(page_title="Violation Checker", page_icon="🚦", layout="wide")
@@ -93,6 +94,8 @@ with st.sidebar:
         st.info("Choose a provider, enter your credentials and click Connect.")
 
     st.divider()
+    vehicle_class = st.selectbox("Vehicle type", list(VEHICLE_CLASSES), format_func=VEHICLE_CLASSES.get,
+                                 help="Sets the ADNOC speed limits used in the checks (policy HRT-2026-01).")
     use_agent = st.toggle("Run AI agent review", value=True,
                           help="Off = only extraction + deterministic checks (faster, cheaper).")
 
@@ -116,7 +119,8 @@ if run:
     def worker():
         try:
             box["result"] = check_violations(llm, viol_pdf.getvalue(), rag_pdf.getvalue() if rag_pdf else None,
-                                             shot_list, progress=msgs.put, use_agent=use_agent)
+                                             shot_list, progress=msgs.put, use_agent=use_agent,
+                                             vehicle_class=vehicle_class)
         except Exception as e:  # surfaced below
             box["error"] = e
 

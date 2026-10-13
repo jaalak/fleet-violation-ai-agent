@@ -211,7 +211,7 @@ async function run() {
   try {
     const { cases } = await checkViolations(llm, {
       violationPdf: state.files.viol, ragPdf: state.files.rag, shots: state.files.shots,
-    }, { progress: (m) => log(m), useAgent: $("useagent").checked, cropper });
+    }, { progress: (m) => log(m), useAgent: $("useagent").checked, cropper, vehicleClass: $("vehicle").value });
     state.results = { cases, label: `${llm.label} · ${model}` };
     renderResults();
     $("logtitle").textContent = "Finished";

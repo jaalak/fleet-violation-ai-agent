@@ -64,8 +64,16 @@
     </div>
 
     <hr>
+    <label class="field">Vehicle type
+      <select id="vehicle">
+        <option value="light">Light vehicle</option>
+        <option value="bus_small">Bus, 22 seats or fewer</option>
+        <option value="heavy">Heavy vehicle / bus 23+ seats</option>
+      </select>
+    </label>
+    <p class="hint">Sets the ADNOC speed limits used in the checks (policy HRT-2026-01).</p>
     <label class="check"><input type="checkbox" id="useagent" checked> Run AI agent review
-      <span class="hint block">Off = only read the documents and run the 7 checks (faster, cheaper).</span></label>
+      <span class="hint block">Off = only read the documents and run the 8 checks (faster, cheaper).</span></label>
 
     <details class="privacy">
       <summary>Privacy &amp; keys</summary>

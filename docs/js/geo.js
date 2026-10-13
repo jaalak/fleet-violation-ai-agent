@@ -60,6 +60,7 @@ export async function nearestRoad(lat, lon, radiusM = 300, fetchImpl = fetch) {
           ref: tags.ref || null,
           highway: tags.highway || null,
           maxspeed: tags.maxspeed || null,
+          surface: tags.surface || null,
         });
       }
       roads.sort((a, b) => a.distance_m - b.distance_m);

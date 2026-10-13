@@ -16,11 +16,14 @@ false positive caused by a GPS jump, a wrong speed zone or a single-sample spike
    |---|---|
    | R1 | Trip distance ÷ duration vs reported speed (impossible speed → FAIL) |
    | R2 | Point-to-point GPS speed when both trace endpoints are known (GPS jump → FAIL) |
-   | R3 | Event shorter than `min_violation_duration_s` → FLAG (possible spike) |
-   | R4 | Reported speed actually exceeds the zone limit shown in the popup |
+   | R3 | Duration vs the policy threshold for the event type (Over speed ≥ 30 s; Reckless ≥ 0 s) |
+   | R4 | Speed vs the policy trigger (Reckless = zone limit + 20 km/h) |
    | R5 | GPS point is on a real road (OpenStreetMap) and the road's posted limit vs the zone limit |
    | R6 | Odometer progress between consecutive events is plausible |
-   | R7 | Counts agree with the Road Safety RAG report |
+   | R7 | Counts agree with the Road Safety RAG report, plus the RAG colour impact of overturning |
+   | R8 | Zone limit vs ADNOC policy for the vehicle class; zone road type vs the actual road |
+
+   Thresholds come from the ADNOC IVMS & AFDD System Configuration HRT-2026-01 (`checker/policy.py`, `docs/js/policy.js`).
 
 4. **Agent** (`checker/agent.py`): the selected LLM gets the data, the rule results and the screenshot. It
    can zoom into the map, compute point-to-point speeds and look up roads. It then submits a verdict:

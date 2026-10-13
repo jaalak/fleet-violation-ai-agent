@@ -163,8 +163,8 @@
         <p>The LLM extracts every row from the <em>Violation Details</em> PDF, the optional <em>Road Safety RAG</em>
           PDF and each <em>Historical Tracking</em> screenshot: times, speeds, odometer, zone limit and coordinates.</p></div>
       <div class="card"><div class="step-n">2</div><h3>Check</h3>
-        <p>Seven fixed checks test physics, timing, zone limits, the OpenStreetMap road network and agreement
-          between the reports. Each one scores PASS / FLAG / FAIL.</p></div>
+        <p>Eight fixed checks test physics, the ADNOC policy thresholds, zone limits, the OpenStreetMap road network and
+          agreement between the reports. Each one scores PASS / FLAG / FAIL.</p></div>
       <div class="card"><div class="step-n">3</div><h3>Decide</h3>
         <p>An agent looks at the evidence. It can zoom into the map, calculate speeds and look up roads, then
           gives a verdict with reasons and a recommended next step.</p></div>
@@ -180,19 +180,20 @@
   </section>
 
   <section id="checks">
-    <h2>The seven checks</h2>
-    <p class="sub">Thresholds are configurable in <code>config.yaml</code>.</p>
+    <h2>The eight checks</h2>
+    <p class="sub">Checked against the ADNOC IVMS &amp; AFDD System Configuration (HRT-2026-01): Reckless = configured limit + 20&nbsp;km/h with no minimum duration; Over speed = above the limit for 30&nbsp;s; light vehicles max 140&nbsp;km/h on black top and 80&nbsp;km/h off-road.</p>
     <div class="table-wrap">
       <table>
         <thead><tr><th>Rule</th><th>What it tests</th><th>Catches</th></tr></thead>
         <tbody>
           <tr><td><strong>R1</strong></td><td>Trip distance ÷ duration vs the reported speed</td><td>Speed readings that the odometer doesn't support</td></tr>
           <tr><td><strong>R2</strong></td><td>Point-to-point GPS speed between trace endpoints</td><td>GPS jumps that imply impossible speeds</td></tr>
-          <tr><td><strong>R3</strong></td><td>Duration of the event</td><td>Single-sample spikes lasting a few seconds</td></tr>
-          <tr><td><strong>R4</strong></td><td>Reported speed vs the zone limit applied</td><td>Violations that never exceeded the limit</td></tr>
+          <tr><td><strong>R3</strong></td><td>Duration vs the policy threshold for that event type</td><td>Over-speed events shorter than 30 s (Reckless has no minimum)</td></tr>
+          <tr><td><strong>R4</strong></td><td>Speed vs the policy trigger (Reckless = limit + 20 km/h)</td><td>Events that never reached the threshold</td></tr>
           <tr><td><strong>R5</strong></td><td>Is the GPS point on a real road? What's that road's posted limit?</td><td>Off-road fixes and the wrong speed zone being applied</td></tr>
           <tr><td><strong>R6</strong></td><td>Odometer progress between consecutive events</td><td>Implausible jumps or rollbacks</td></tr>
-          <tr><td><strong>R7</strong></td><td>Counts agree with the Road Safety RAG report</td><td>Reporting inconsistencies</td></tr>
+          <tr><td><strong>R7</strong></td><td>Counts agree with the Road Safety RAG report, and the RAG colour impact</td><td>Reporting inconsistencies; shows e.g. Red → Amber if overturned</td></tr>
+          <tr><td><strong>R8</strong></td><td>Zone limit vs the policy for the vehicle class, and zone road type vs the real road</td><td>Off-road limits applied on a highway; misconfigured geofences</td></tr>
         </tbody>
       </table>
     </div>
