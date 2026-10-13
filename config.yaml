@@ -1,0 +1,22 @@
+# Thresholds used by the deterministic rules (checker/rules.py).
+# The LLM provider and model are chosen in the app's sidebar.
+
+rules:
+  # R1: trip distance / duration must be within this many km/h of the reported speed
+  speed_consistency_tolerance_kph: 15
+  # R2: any implied speed above this is physically impossible for a road vehicle -> GPS jump
+  max_plausible_speed_kph: 200
+  # R3: events shorter than this are treated as transient spikes
+  min_violation_duration_s: 10
+  # R4: radius used to look for a road around the GPS point
+  road_search_radius_m: 40
+  # R5: average speed between consecutive events above this is implausible
+  max_plausible_avg_speed_kph: 160
+  # Matching: screenshot popup time vs. violation start time
+  match_tolerance_s: 5
+
+overpass_urls:  # tried in order
+  - https://overpass-api.de/api/interpreter
+  - https://overpass.kumi.systems/api/interpreter
+  - https://overpass.private.coffee/api/interpreter
+overpass_timeout_s: 20

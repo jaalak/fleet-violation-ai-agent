@@ -1,0 +1,15 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Secrets
+.env
+.streamlit/secrets.toml
+
+# Real reports / screenshots contain personal data - never commit them
+*.pdf
+*.jpg
+*.jpeg
+samples/
